@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .models import LiveEvent, ScoredEvent
+
+
+DB_PATH = Path(__file__).resolve().parents[1] / "data" / "live_leads.sqlite3"
+
+
+def _ensure_parent_directory() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+@contextmanager
+def connect() -> sqlite3.Connection:
+    _ensure_parent_directory()
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    try:
+        yield connection
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def init_db() -> None:
+    with connect() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS live_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                location TEXT NOT NULL,
+                description TEXT NOT NULL,
+                speakers_json TEXT NOT NULL,
+                expected_size TEXT NOT NULL,
+                audience TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS event_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id INTEGER NOT NULL,
+                score INTEGER NOT NULL,
+                industry TEXT NOT NULL,
+                persona TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                suggested_questions_json TEXT NOT NULL,
+                suggested_followup TEXT NOT NULL,
+                scored_at TEXT NOT NULL,
+                FOREIGN KEY(event_id) REFERENCES live_events(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS ingestion_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_name TEXT NOT NULL,
+                event_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+
+
+def _external_id(event: LiveEvent) -> str:
+    return f"{event.source}:{event.url}"
+
+
+def upsert_events(events: list[LiveEvent]) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with connect() as connection:
+        for event in events:
+            connection.execute(
+                """
+                INSERT INTO live_events (
+                    source, external_id, title, url, start_time, timezone, location,
+                    description, speakers_json, expected_size, audience, tags_json,
+                    first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(external_id) DO UPDATE SET
+                    title=excluded.title,
+                    url=excluded.url,
+                    start_time=excluded.start_time,
+                    timezone=excluded.timezone,
+                    location=excluded.location,
+                    description=excluded.description,
+                    speakers_json=excluded.speakers_json,
+                    expected_size=excluded.expected_size,
+                    audience=excluded.audience,
+                    tags_json=excluded.tags_json,
+                    last_seen_at=excluded.last_seen_at
+                """,
+                (
+                    event.source,
+                    _external_id(event),
+                    event.title,
+                    event.url,
+                    event.start_time.isoformat(),
+                    event.timezone,
+                    event.location,
+                    event.description,
+                    json.dumps(event.speakers, ensure_ascii=False),
+                    event.expected_size,
+                    event.audience,
+                    json.dumps(event.tags, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+
+
+def fetch_events() -> list[LiveEvent]:
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT source, title, url, start_time, timezone, location, description,
+                   speakers_json, expected_size, audience, tags_json
+            FROM live_events
+            ORDER BY start_time ASC
+            """
+        ).fetchall()
+
+    events: list[LiveEvent] = []
+    for row in rows:
+        events.append(
+            LiveEvent(
+                title=row["title"],
+                source=row["source"],
+                url=row["url"],
+                start_time=datetime.fromisoformat(row["start_time"]),
+                timezone=row["timezone"],
+                location=row["location"],
+                description=row["description"],
+                speakers=json.loads(row["speakers_json"]),
+                expected_size=row["expected_size"],
+                audience=row["audience"],
+                tags=json.loads(row["tags_json"]),
+            )
+        )
+    return events
+
+
+def save_scored_events(scored_events: list[ScoredEvent]) -> None:
+    with connect() as connection:
+        for item in scored_events:
+            event_row = connection.execute(
+                "SELECT id FROM live_events WHERE external_id = ?",
+                (_external_id(item.event),),
+            ).fetchone()
+            if event_row is None:
+                continue
+            connection.execute(
+                """
+                INSERT INTO event_scores (
+                    event_id, score, industry, persona, reason,
+                    suggested_questions_json, suggested_followup, scored_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_row["id"],
+                    item.score,
+                    item.industry,
+                    item.persona,
+                    item.reason,
+                    json.dumps(item.suggested_questions, ensure_ascii=False),
+                    item.suggested_followup,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+
+def fetch_latest_scored_events() -> list[ScoredEvent]:
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                e.source,
+                e.title,
+                e.url,
+                e.start_time,
+                e.timezone,
+                e.location,
+                e.description,
+                e.speakers_json,
+                e.expected_size,
+                e.audience,
+                e.tags_json,
+                s.score,
+                s.industry,
+                s.persona,
+                s.reason,
+                s.suggested_questions_json,
+                s.suggested_followup
+            FROM event_scores s
+            JOIN live_events e ON e.id = s.event_id
+            WHERE s.id IN (
+                SELECT MAX(id)
+                FROM event_scores
+                GROUP BY event_id
+            )
+            ORDER BY s.score DESC, e.start_time ASC
+            """
+        ).fetchall()
+
+    scored_events: list[ScoredEvent] = []
+    for row in rows:
+        event = LiveEvent(
+            title=row["title"],
+            source=row["source"],
+            url=row["url"],
+            start_time=datetime.fromisoformat(row["start_time"]),
+            timezone=row["timezone"],
+            location=row["location"],
+            description=row["description"],
+            speakers=json.loads(row["speakers_json"]),
+            expected_size=row["expected_size"],
+            audience=row["audience"],
+            tags=json.loads(row["tags_json"]),
+        )
+        scored_events.append(
+            ScoredEvent(
+                event=event,
+                score=row["score"],
+                industry=row["industry"],
+                persona=row["persona"],
+                reason=row["reason"],
+                suggested_questions=json.loads(row["suggested_questions_json"]),
+                suggested_followup=row["suggested_followup"],
+            )
+        )
+    return scored_events
+
+
+def get_history_counts() -> dict[str, int]:
+    with connect() as connection:
+        event_count = connection.execute("SELECT COUNT(*) AS count FROM live_events").fetchone()["count"]
+        score_count = connection.execute("SELECT COUNT(*) AS count FROM event_scores").fetchone()["count"]
+        run_count = connection.execute("SELECT COUNT(*) AS count FROM ingestion_runs").fetchone()["count"]
+    return {
+        "events": event_count,
+        "scores": score_count,
+        "runs": run_count,
+    }
+
+
+def save_ingestion_run(source_name: str, event_count: int) -> None:
+    with connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO ingestion_runs (source_name, event_count, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (source_name, event_count, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def fetch_recent_ingestion_runs(limit: int = 20) -> list[dict[str, object]]:
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT source_name, event_count, created_at
+            FROM ingestion_runs
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_recent_score_history(limit: int = 25) -> list[dict[str, object]]:
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                e.title,
+                e.source,
+                s.score,
+                s.industry,
+                s.persona,
+                s.scored_at,
+                s.reason
+            FROM event_scores s
+            JOIN live_events e ON e.id = s.event_id
+            ORDER BY s.scored_at DESC, s.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
