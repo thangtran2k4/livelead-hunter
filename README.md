@@ -48,3 +48,17 @@ Practical crawl rules:
 - Throttle requests and respect rate limits.
 - Do not collect private or sensitive personal data without a clear legal basis.
 - Keep raw payloads and derived scores separate so the scoring model can change later without losing history.
+
+## Optional environment variables
+
+- `OPENAI_API_KEY`: enables AI-backed scoring and content suggestions.
+- `OPENAI_MODEL`: overrides the default model name used for scoring.
+- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`: enable Telegram alerts.
+- `SLACK_WEBHOOK_URL`: enables Slack alerts.
+- `ALERT_SCORE_THRESHOLD`: score threshold for notifications in the UI.
+
+## Run tests
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```

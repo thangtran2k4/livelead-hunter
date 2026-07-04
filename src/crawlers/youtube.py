@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
 from yt_dlp import YoutubeDL
 
 from ..models import LiveEvent
+
+
+logger = logging.getLogger(__name__)
 
 
 def _to_datetime(timestamp: object | None) -> datetime:
@@ -39,20 +44,30 @@ def _build_event(info: dict[str, object]) -> LiveEvent:
 
 
 def crawl_youtube_live(query: str, max_results: int = 10) -> list[LiveEvent]:
-    search_query = f"ytsearch{max_results}:{query} live webinar event"
     search_opts = {
         "quiet": True,
         "skip_download": True,
         "extract_flat": True,
         "noplaylist": True,
         "ignoreerrors": True,
+        "playlistend": max_results,
     }
 
     events: list[LiveEvent] = []
+    search_terms = f"https://www.youtube.com/results?search_query={query}&sp=EgJAAQ%253D%253D"
     with YoutubeDL(search_opts) as ydl:
-        search_result = ydl.extract_info(search_query, download=False)
+        search_result = ydl.extract_info(search_terms, download=False)
 
     entries = (search_result or {}).get("entries") or []
+    if not entries:
+        fallback_query = quote_plus(query)
+        fallback_url = f"https://www.youtube.com/results?search_query={fallback_query}"
+        with YoutubeDL(search_opts) as ydl:
+            search_result = ydl.extract_info(fallback_url, download=False)
+        entries = (search_result or {}).get("entries") or []
+
+    logger.info("YouTube crawl search completed", extra={"query": query, "max_results": max_results})
+
     for entry in entries:
         if not isinstance(entry, dict):
             continue

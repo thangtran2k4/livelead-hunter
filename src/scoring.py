@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from .ai import AIAnalysis, analyze_event_with_openai
 from .config import (
     INDUSTRY_KEYWORDS,
     PERSONA_KEYWORDS,
@@ -23,6 +24,10 @@ def _text_blob(event: LiveEvent) -> str:
         " ".join(event.tags),
     ]
     return " ".join(parts).lower()
+
+
+def search_blob(event: LiveEvent) -> str:
+    return _text_blob(event)
 
 
 def classify_industry(event: LiveEvent) -> str:
@@ -65,6 +70,19 @@ def generate_followup(event: LiveEvent, persona: str) -> str:
 
 
 def score_event(event: LiveEvent) -> ScoredEvent:
+    ai_analysis: AIAnalysis | None = analyze_event_with_openai(event)
+    if ai_analysis is not None:
+        return ScoredEvent(
+            event=event,
+            score=max(1, min(100, ai_analysis.score)),
+            industry=ai_analysis.industry,
+            persona=ai_analysis.persona,
+            reason=f"AI ({ai_analysis.provider}): {ai_analysis.reason}",
+            analysis_provider=ai_analysis.provider,
+            suggested_questions=ai_analysis.suggested_questions or generate_questions(event, ai_analysis.industry, ai_analysis.persona),
+            suggested_followup=ai_analysis.suggested_followup or generate_followup(event, ai_analysis.persona),
+        )
+
     industry = classify_industry(event)
     persona = classify_persona(event)
     blob = _text_blob(event)
@@ -95,6 +113,7 @@ def score_event(event: LiveEvent) -> ScoredEvent:
         industry=industry,
         persona=persona,
         reason="; ".join(reasons),
+        analysis_provider="rule-based",
         suggested_questions=generate_questions(event, industry, persona),
         suggested_followup=generate_followup(event, persona),
     )

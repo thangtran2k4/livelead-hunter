@@ -59,6 +59,7 @@ def init_db() -> None:
                 reason TEXT NOT NULL,
                 suggested_questions_json TEXT NOT NULL,
                 suggested_followup TEXT NOT NULL,
+                analysis_provider TEXT NOT NULL DEFAULT 'rule-based',
                 scored_at TEXT NOT NULL,
                 FOREIGN KEY(event_id) REFERENCES live_events(id)
             );
@@ -71,6 +72,11 @@ def init_db() -> None:
             );
             """
         )
+
+        columns = connection.execute("PRAGMA table_info(event_scores)").fetchall()
+        column_names = {row["name"] for row in columns}
+        if "analysis_provider" not in column_names:
+            connection.execute("ALTER TABLE event_scores ADD COLUMN analysis_provider TEXT NOT NULL DEFAULT 'rule-based'")
 
 
 def _external_id(event: LiveEvent) -> str:
@@ -164,8 +170,8 @@ def save_scored_events(scored_events: list[ScoredEvent]) -> None:
                 """
                 INSERT INTO event_scores (
                     event_id, score, industry, persona, reason,
-                    suggested_questions_json, suggested_followup, scored_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    suggested_questions_json, suggested_followup, analysis_provider, scored_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_row["id"],
@@ -175,6 +181,7 @@ def save_scored_events(scored_events: list[ScoredEvent]) -> None:
                     item.reason,
                     json.dumps(item.suggested_questions, ensure_ascii=False),
                     item.suggested_followup,
+                    item.analysis_provider,
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
@@ -201,7 +208,8 @@ def fetch_latest_scored_events() -> list[ScoredEvent]:
                 s.persona,
                 s.reason,
                 s.suggested_questions_json,
-                s.suggested_followup
+                s.suggested_followup,
+                s.analysis_provider
             FROM event_scores s
             JOIN live_events e ON e.id = s.event_id
             WHERE s.id IN (
@@ -235,6 +243,7 @@ def fetch_latest_scored_events() -> list[ScoredEvent]:
                 industry=row["industry"],
                 persona=row["persona"],
                 reason=row["reason"],
+                analysis_provider=row["analysis_provider"],
                 suggested_questions=json.loads(row["suggested_questions_json"]),
                 suggested_followup=row["suggested_followup"],
             )
@@ -286,14 +295,30 @@ def fetch_recent_score_history(limit: int = 25) -> list[dict[str, object]]:
             SELECT
                 e.title,
                 e.source,
+                e.description,
                 s.score,
                 s.industry,
                 s.persona,
                 s.scored_at,
+                s.analysis_provider,
                 s.reason
             FROM event_scores s
             JOIN live_events e ON e.id = s.event_id
             ORDER BY s.scored_at DESC, s.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_recent_events(limit: int = 50) -> list[dict[str, object]]:
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT title, source, url, start_time, location, description, expected_size, audience
+            FROM live_events
+            ORDER BY last_seen_at DESC, id DESC
             LIMIT ?
             """,
             (limit,),
