@@ -20,6 +20,7 @@ class AIAnalysis:
     persona: str
     score: int
     reason: str
+    promotional_comment: str
     suggested_questions: list[str]
     suggested_followup: str
     provider: str
@@ -28,8 +29,9 @@ class AIAnalysis:
 def _build_prompt(event: LiveEvent) -> str:
     return (
         "You are a B2B sales strategist. Analyze the livestream/event and return JSON only with keys: "
-        "industry, persona, score, reason, suggested_questions, suggested_followup. "
+        "industry, persona, score, reason, promotional_comment, suggested_questions, suggested_followup. "
         "Score must be an integer from 1 to 100. Keep suggested_questions as a list of 3 short questions. "
+        "The promotional_comment should be a short, engaging sentence in Vietnamese introducing that you represent company ABC offering service CD ('tôi đại diện doanh nghiệp ABC cung cấp dịch vụ CD') and how it can help the viewers. "
         "Focus on lead-generation value, audience fit, and conversation quality.\n\n"
         f"Title: {event.title}\n"
         f"Source: {event.source}\n"
@@ -75,6 +77,7 @@ def analyze_event_with_openai(event: LiveEvent) -> AIAnalysis | None:
             persona=str(data.get("persona", "General")),
             score=int(data.get("score", 50)),
             reason=str(data.get("reason", "AI analysis completed.")),
+            promotional_comment=str(data.get("promotional_comment", "")),
             suggested_questions=[str(item) for item in data.get("suggested_questions", [])][:3],
             suggested_followup=str(data.get("suggested_followup", "")),
             provider=f"openai:{model}",

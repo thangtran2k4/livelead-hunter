@@ -69,6 +69,10 @@ def generate_followup(event: LiveEvent, persona: str) -> str:
     )
 
 
+def generate_promotional_comment(event: LiveEvent) -> str:
+    return f"Chào mọi người, tôi đại diện doanh nghiệp ABC cung cấp dịch vụ CD. Rất vui được tham gia buổi chia sẻ về {event.title}!"
+
+
 def score_event(event: LiveEvent) -> ScoredEvent:
     ai_analysis: AIAnalysis | None = analyze_event_with_openai(event)
     if ai_analysis is not None:
@@ -78,6 +82,7 @@ def score_event(event: LiveEvent) -> ScoredEvent:
             industry=ai_analysis.industry,
             persona=ai_analysis.persona,
             reason=f"AI ({ai_analysis.provider}): {ai_analysis.reason}",
+            promotional_comment=ai_analysis.promotional_comment or generate_promotional_comment(event),
             analysis_provider=ai_analysis.provider,
             suggested_questions=ai_analysis.suggested_questions or generate_questions(event, ai_analysis.industry, ai_analysis.persona),
             suggested_followup=ai_analysis.suggested_followup or generate_followup(event, ai_analysis.persona),
@@ -113,6 +118,7 @@ def score_event(event: LiveEvent) -> ScoredEvent:
         industry=industry,
         persona=persona,
         reason="; ".join(reasons),
+        promotional_comment=generate_promotional_comment(event),
         analysis_provider="rule-based",
         suggested_questions=generate_questions(event, industry, persona),
         suggested_followup=generate_followup(event, persona),

@@ -27,6 +27,7 @@ class ScoredEvent:
     industry: str
     persona: str
     reason: str
+    promotional_comment: str = ""
     analysis_provider: str = "rule-based"
     suggested_questions: List[str] = field(default_factory=list)
     suggested_followup: str = ""

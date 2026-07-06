@@ -88,7 +88,7 @@ def crawl_youtube_live(query: str, max_results: int = 10) -> list[LiveEvent]:
             continue
 
         live_status = str(detail.get("live_status") or "").lower()
-        if live_status not in {"is_live", "is_upcoming"}:
+        if live_status != "is_live":
             continue
 
         events.append(_build_event(detail))
