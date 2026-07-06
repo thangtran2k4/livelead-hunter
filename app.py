@@ -10,6 +10,7 @@ import streamlit as st
 from src.crawlers import crawl_youtube_live
 from src.db import (
     DB_PATH,
+    export_seed_events,
     fetch_events,
     fetch_latest_scored_events,
     fetch_recent_events,
@@ -389,6 +390,17 @@ with tab_crawl:
         with st.expander("Recent stored events", expanded=False):
             events_df = _recent_events_frame(recent_events)
             st.dataframe(events_df, use_container_width=True, hide_index=True, height=220)
+
+    st.markdown("### Seed export")
+    st.caption("Xuất file seed từ các livestream đã tìm được để dùng lại cho crawl, test hoặc import sang công cụ khác.")
+    seed_csv = export_seed_events(limit=50)
+    st.download_button(
+        "Tải seed file CSV",
+        data=seed_csv.encode("utf-8"),
+        file_name="live_seed_events.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 with tab_scoring:
     st.subheader("Lịch sử scoring")

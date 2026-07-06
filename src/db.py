@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import csv
 import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
+from typing import Generator
+import re
 
 from .models import LiveEvent, ScoredEvent
 
@@ -17,7 +21,7 @@ def _ensure_parent_directory() -> None:
 
 
 @contextmanager
-def connect() -> sqlite3.Connection:
+def connect() -> Generator[sqlite3.Connection, None, None]:
     _ensure_parent_directory()
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
@@ -324,3 +328,60 @@ def fetch_recent_events(limit: int = 50) -> list[dict[str, object]]:
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _clean_seed_description(description: str) -> str:
+    lines = [line.strip() for line in description.splitlines()]
+    cleaned_lines: list[str] = []
+    skip_markers = (
+        "watch more",
+        "follow ",
+        "facebook:",
+        "twitter:",
+        "instagram:",
+        "website:",
+        "get more",
+        "subscribe",
+        "join this channel",
+        "support the channel",
+        "thanks for watching",
+        "watch more interesting videos",
+        "visit our website",
+    )
+    url_pattern = re.compile(r"https?://|www\.|bit\.ly|youtu\.be|t\.me|instagram\.com|facebook\.com|twitter\.com", re.IGNORECASE)
+
+    for line in lines:
+        if not line:
+            continue
+        lower_line = line.lower()
+        if any(marker in lower_line for marker in skip_markers):
+            continue
+        if url_pattern.search(line):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned_text = "\n".join(cleaned_lines).strip()
+    cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text)
+    return cleaned_text
+
+
+def export_seed_events(limit: int = 50) -> str:
+    events = fetch_recent_events(limit=limit)
+    output = StringIO()
+    fieldnames = ["title", "source", "url", "start_time", "location", "audience", "expected_size", "description"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in events:
+        writer.writerow(
+            {
+                "title": row.get("title", ""),
+                "source": row.get("source", ""),
+                "url": row.get("url", ""),
+                "start_time": row.get("start_time", ""),
+                "location": row.get("location", ""),
+                "audience": row.get("audience", ""),
+                "expected_size": row.get("expected_size", ""),
+                "description": _clean_seed_description(str(row.get("description", ""))),
+            }
+        )
+    return output.getvalue()
